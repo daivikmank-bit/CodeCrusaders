@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PostureAlert — AI Posture Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --surface2: #263246; --border: #334155;
+      --accent: #0ea5e9; --accent2: #6366f1; --good: #22c55e; --warn: #f59e0b;
+      --danger: #ef4444; --text: #f1f5f9; --muted: #94a3b8; --radius: 12px;
+      --oc: #f97316;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .logo { display: flex; align-items: center; gap: 10px; font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    .oc-badge { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: var(--oc); background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.35); padding: 4px 10px; border-radius: 20px; font-weight: 600; }
+    .oc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--oc); box-shadow: 0 0 6px var(--oc); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .team-badge { font-size: 0.75rem; color: var(--muted); background: var(--surface2); padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border); }
+    main { flex: 1; display: grid; grid-template-columns: 1fr 360px; }
+    .camera-panel { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+    .video-wrap { position: relative; border-radius: var(--radius); overflow: hidden; background: #000; aspect-ratio: 4/3; max-height: 480px; }
+    #video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+    #canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+    .score-overlay { position: absolute; top: 12px; left: 12px; background: rgba(15,23,42,0.85); border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px; display: flex; flex-direction: column; align-items: center; }
+    .score-label { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .score-value { font-size: 2rem; font-weight: 800; line-height: 1; }
+    .status-badge { position: absolute; top: 12px; right: 12px; padding: 5px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+    .status-badge.good { background: rgba(34,197,94,0.15); color: var(--good); border: 1px solid rgba(34,197,94,0.3); }
+    .status-badge.warn { background: rgba(245,158,11,0.15); color: var(--warn); border: 1px solid rgba(245,158,11,0.3); }
+    .status-badge.bad  { background: rgba(239,68,68,0.15);  color: var(--danger); border: 1px solid rgba(239,68,68,0.3); }
+    .status-badge.off  { background: rgba(148,163,184,0.1); color: var(--muted);  border: 1px solid var(--border); }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn { padding: 9px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.875rem; font-weight: 600; transition: all 0.15s; }
+    .btn-primary { background: var(--accent); color: #fff; } .btn-primary:hover { background: #0284c7; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); } .btn-secondary:hover { background: var(--border); }
+    .btn-danger { background: rgba(239,68,68,0.15); color: var(--danger); border: 1px solid rgba(239,68,68,0.3); } .btn-danger:hover { background: rgba(239,68,68,0.25); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; text-align: center; }
+    .stat-card .val { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+    .stat-card .lbl { font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+
+    /* Sidebar */
+    .sidebar { border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; overflow-y: auto; }
+    .sidebar-section { padding: 16px 18px; border-bottom: 1px solid var(--border); }
+    .sidebar-section h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 10px; }
+
+    /* OpenClaw panel */
+    .oc-panel { padding: 16px 18px; border-bottom: 1px solid var(--border); background: rgba(249,115,22,0.04); border-left: 3px solid var(--oc); }
+    .oc-panel h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--oc); margin-bottom: 10px; }
+    .oc-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+    .oc-tab { flex: 1; padding: 5px 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--muted); font-size: 0.7rem; font-weight: 600; cursor: pointer; text-align: center; transition: all 0.15s; }
+    .oc-tab.active { background: rgba(249,115,22,0.15); border-color: var(--oc); color: var(--oc); }
+    .oc-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .oc-status-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+    .oc-status-label { font-size: 0.78rem; color: var(--muted); }
+    .oc-status-value { font-size: 0.78rem; font-weight: 600; }
+    .oc-status-value.ok { color: var(--good); }
+    .oc-status-value.off { color: var(--muted); }
+    .oc-model-pill { display: inline-flex; align-items: center; background: rgba(249,115,22,0.1); border: 1px solid rgba(249,115,22,0.2); border-radius: 12px; padding: 3px 8px; font-size: 0.68rem; color: var(--oc); font-family: 'Courier New', monospace; }
+    .oc-hint { font-size: 0.69rem; color: var(--muted); line-height: 1.4; }
+    input[type=password], input[type=text], input[type=url] { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; color: var(--text); font-size: 0.82rem; width: 100%; }
+    input:focus { outline: none; border-color: var(--oc); }
+
+    /* Slider */
+    .slider-row { display: flex; align-items: center; gap: 10px; }
+    input[type=range] { flex: 1; accent-color: var(--accent); }
+    .slider-val { font-weight: 700; font-size: 1rem; color: var(--accent); width: 32px; text-align: right; }
+
+    /* Issues */
+    .issues-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .issue-item { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; padding: 6px 10px; border-radius: 8px; background: var(--surface2); }
+    .issue-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Coach */
+    .coach-area { flex: 1; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+    .coach-area h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+    .coach-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; max-height: 220px; }
+    .coach-msg { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 0.82rem; line-height: 1.5; }
+    .oc-msg-label { font-size: 0.63rem; color: var(--oc); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .coach-msg.loading { color: var(--muted); font-style: italic; }
+    .coach-msg.summary { border-color: var(--accent2); background: rgba(99,102,241,0.07); }
+    .coach-msg.oc-powered { border-color: rgba(249,115,22,0.35); }
+    .coach-actions { display: flex; gap: 8px; }
+    .empty-state { color: var(--muted); font-size: 0.82rem; font-style: italic; }
+    .alert-flash { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: rgba(239,68,68,0.9); color: #fff; padding: 12px 28px; border-radius: 50px; font-weight: 700; font-size: 1rem; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 100; }
+    .alert-flash.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span>🪑</span> PostureAlert</div>
+  <div class="header-right">
+    <div class="oc-badge"><span class="oc-dot"></span>OpenClaw · Claude Sonnet 4</div>
+    <span class="team-badge">Team: Code Crusaders</span>
+  </div>
+</header>
+
+<main>
+  <div class="camera-panel">
+    <div class="video-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="canvas"></canvas>
+      <div class="score-overlay">
+        <span class="score-label">Score</span>
+        <span class="score-value" id="scoreVal">--</span>
+      </div>
+      <div class="status-badge off" id="statusBadge">Not Started</div>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-primary"   id="startBtn" onclick="startSession()">▶ Start Session</button>
+      <button class="btn btn-secondary" id="pauseBtn" onclick="togglePause()" disabled>⏸ Pause</button>
+      <button class="btn btn-danger"    id="stopBtn"  onclick="stopSession()" disabled>⏹ End Session</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card"><div class="val" id="statTime">0:00</div><div class="lbl">Session Time</div></div>
+      <div class="stat-card"><div class="val" id="statGood">0%</div><div class="lbl">Good Posture</div></div>
+      <div class="stat-card"><div class="val" id="statAlerts">0</div><div class="lbl">Alerts Fired</div></div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+
+    <!-- ── OpenClaw Gateway Panel ───────────────────────────────────────────── -->
+    <div class="oc-panel">
+      <h3>🦞 OpenClaw Gateway</h3>
+
+      <div style="font-size:0.72rem;color:var(--muted);margin-bottom:7px">Connection mode:</div>
+      <div class="oc-tabs">
+        <div class="oc-tab active" id="tab-key"     onclick="setMode('key')">API Key</div>
+        <div class="oc-tab"        id="tab-gateway"  onclick="setMode('gateway')">Gateway URL</div>
+      </div>
+
+      <!-- API Key mode -->
+      <div id="mode-key">
+        <div class="oc-row">
+          <input type="password" id="apiKeyInput" placeholder="sk-ant-..." />
+          <button class="btn btn-secondary" onclick="saveConfig()" style="white-space:nowrap;font-size:0.8rem;padding:6px 12px;flex-shrink:0">Save</button>
+        </div>
+        <div class="oc-hint">Anthropic API key → routed via OpenClaw's <code style="color:var(--oc)">anthropic/*</code> provider.</div>
+      </div>
+
+      <!-- Gateway URL mode -->
+      <div id="mode-gateway" style="display:none">
+        <div class="oc-row">
+          <input type="url" id="gatewayInput" placeholder="http://localhost:5999/v1" />
+          <button class="btn btn-secondary" onclick="saveConfig()" style="white-space:nowrap;font-size:0.8rem;padding:6px 12px;flex-shrink:0">Save</button>
+        </div>
+        <div style="margin-top:6px">
+          <input type="password" id="gatewayKeyInput" placeholder="Gateway key (optional)" />
+        </div>
+        <div class="oc-hint" style="margin-top:5px">Run <code style="color:var(--oc)">openclaw serve</code> then paste the gateway URL above.</div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="oc-status-row">
+          <span class="oc-status-label">Status</span>
+          <span class="oc-status-value off" id="ocStatus">Not connected</span>
+        </div>
+        <div class="oc-status-row">
+          <span class="oc-status-label">Model</span>
+          <span class="oc-model-pill">anthropic/claude-sonnet-4-20250514</span>
+        </div>
+        <div class="oc-status-row">
+          <span class="oc-status-label">Agents</span>
+          <span style="font-size:0.7rem;color:var(--muted)">coach · summary</span>
+        </div>
+        <div class="oc-status-row">
+          <span class="oc-status-label">Triggers</span>
+          <span style="font-size:0.7rem;color:var(--muted)">Manual · Auto (60s) · End</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sensitivity -->
+    <div class="sidebar-section">
+      <h3>⚙️ Sensitivity</h3>
+      <div class="slider-row">
+        <span style="font-size:0.78rem;color:var(--muted)">Lenient</span>
+        <input type="range" id="threshSlider" min="40" max="85" value="68" oninput="updateThresh(this.value)" />
+        <span style="font-size:0.78rem;color:var(--muted)">Strict</span>
+        <span class="slider-val" id="threshVal">68</span>
+      </div>
+      <div style="font-size:0.72rem;color:var(--muted);margin-top:6px">Alert fires when score drops below this value.</div>
+    </div>
+
+    <!-- Issues -->
+    <div class="sidebar-section">
+      <h3>🔍 Detected Issues</h3>
+      <ul class="issues-list" id="issuesList">
+        <li class="empty-state">No session running</li>
+      </ul>
+    </div>
+
+    <!-- Coach -->
+    <div class="coach-area">
+      <h3>🤖 AI Coach · via OpenClaw</h3>
+      <div class="coach-messages" id="coachMessages">
+        <div class="coach-msg oc-powered">
+          <div class="oc-msg-label">OpenClaw · Claude Sonnet 4</div>
+          Configure OpenClaw above, start a session, then tap "Ask Coach" for real-time ergonomics tips.
+        </div>
+      </div>
+      <div class="coach-actions">
+        <button class="btn btn-secondary" id="askCoachBtn" onclick="askCoach('manual')" disabled style="flex:1">💬 Ask Coach</button>
+        <button class="btn btn-secondary" id="summaryBtn"  onclick="requestSummary()"   disabled>📋 Summary</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="alert-flash" id="alertFlash">⚠️ Fix your posture!</div>
+
+<script>
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  OpenClaw integration
+  //
+  //  Equivalent openclaw.json:
+  //  {
+  //    "env": { "ANTHROPIC_API_KEY": "<user-provided>" },
+  //    "agents": {
+  //      "defaults": {
+  //        "model": { "primary": "anthropic/claude-sonnet-4-20250514" }
+  //      },
+  //      "list": [
+  //        { "id": "coach",   "params": { "cacheRetention": "short" } },
+  //        { "id": "summary", "params": { "cacheRetention": "none"  } }
+  //      ]
+  //    }
+  //  }
+  //
+  //  Three OpenClaw trigger modes (from proposal):
+  //    coach/manual  → user taps "Ask Coach"
+  //    coach/auto    → 60 s sustained poor posture
+  //    summary       → session end
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  const OPENCLAW_MODEL  = 'anthropic/claude-sonnet-4-20250514';  // OpenClaw model ref
+  const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';            // Direct Anthropic ref
+
+  let ocMode       = 'key';   // 'key' | 'gateway'
+  let ocApiKey     = '';
+  let ocGatewayUrl = '';
+  let ocGatewayKey = '';
+
+  // Session state
+  let pose = null, camera = null;
+  let sessionActive = false, paused = false, threshold = 68;
+  let sessionStart = null, frames = 0, goodFrames = 0, alertCount = 0;
+  let lastAlertTime = 0, lastAutoCoachTime = 0, lastScore = 0, lastIssues = [];
+  let timerInterval = null;
+
+  // ── Calibration baseline ──────────────────────────────────────────────────
+  // Captured from the first ~60 frames while user sits upright.
+  // All depth checks are RELATIVE to the user's own body so different
+  // builds and camera distances are handled automatically.
+  let baseline = null;
+  let calibBuf = [];          // raw measurements accumulating toward baseline
+  const CALIB_NEEDED = 60;    // ~3–4 s worth of frames
+  let calibrating = false;
+
+  // ── Mode toggle ───────────────────────────────────────────────────────────────
+  function setMode(m) {
+    ocMode = m;
+    document.getElementById('tab-key').className     = 'oc-tab' + (m === 'key'     ? ' active' : '');
+    document.getElementById('tab-gateway').className = 'oc-tab' + (m === 'gateway' ? ' active' : '');
+    document.getElementById('mode-key').style.display     = m === 'key'     ? '' : 'none';
+    document.getElementById('mode-gateway').style.display = m === 'gateway' ? '' : 'none';
+  }
+
+  function saveConfig() {
+    const statusEl = document.getElementById('ocStatus');
+    if (ocMode === 'key') {
+      ocApiKey = document.getElementById('apiKeyInput').value.trim();
+      statusEl.textContent  = ocApiKey ? '✓ Connected (Anthropic API key)' : 'Not connected';
+      statusEl.className    = 'oc-status-value ' + (ocApiKey ? 'ok' : 'off');
+    } else {
+      ocGatewayUrl = document.getElementById('gatewayInput').value.trim().replace(/\/$/, '');
+      ocGatewayKey = document.getElementById('gatewayKeyInput').value.trim();
+      statusEl.textContent  = ocGatewayUrl ? '✓ Gateway: ' + ocGatewayUrl : 'Not connected';
+      statusEl.className    = 'oc-status-value ' + (ocGatewayUrl ? 'ok' : 'off');
+    }
+  }
+
+  function updateThresh(v) {
+    threshold = parseInt(v);
+    document.getElementById('threshVal').textContent = v;
+  }
+
+  // ── Session control ───────────────────────────────────────────────────────────
+  function startSession() {
+    sessionActive = true; paused = false; sessionStart = Date.now();
+    frames = goodFrames = alertCount = lastAlertTime = lastAutoCoachTime = 0;
+    baseline = null; calibBuf = []; calibrating = true;
+    document.getElementById('startBtn').disabled  = true;
+    document.getElementById('pauseBtn').disabled  = false;
+    document.getElementById('stopBtn').disabled   = false;
+    document.getElementById('askCoachBtn').disabled = false;
+    document.getElementById('summaryBtn').disabled  = false;
+    document.getElementById('statusBadge').className   = 'status-badge warn';
+    document.getElementById('statusBadge').textContent = '⏳ Calibrating…';
+    document.getElementById('issuesList').innerHTML = '<li class="empty-state">Sit upright for 3 s to calibrate…</li>';
+    timerInterval = setInterval(updateTimer, 1000);
+    initMediaPipe();
+  }
+
+  function togglePause() {
+    paused = !paused;
+    document.getElementById('pauseBtn').textContent     = paused ? '▶ Resume' : '⏸ Pause';
+    document.getElementById('statusBadge').className   = paused ? 'status-badge off' : 'status-badge good';
+    document.getElementById('statusBadge').textContent = paused ? 'Paused' : 'Monitoring';
+  }
+
+  async function stopSession() {
+    sessionActive = false; paused = false;
+    clearInterval(timerInterval);
+    if (camera) { camera.stop(); camera = null; }
+    document.getElementById('startBtn').disabled  = false;
+    document.getElementById('pauseBtn').disabled  = true;
+    document.getElementById('stopBtn').disabled   = true;
+    document.getElementById('statusBadge').className   = 'status-badge off';
+    document.getElementById('statusBadge').textContent = 'Session Ended';
+    document.getElementById('scoreVal').textContent    = '--';
+    const c = document.getElementById('canvas');
+    c.getContext('2d').clearRect(0, 0, c.width, c.height);
+    await requestSummary();
+  }
+
+  function updateTimer() {
+    if (!sessionStart || !sessionActive) return;
+    const e = Math.floor((Date.now() - sessionStart) / 1000);
+    document.getElementById('statTime').textContent =
+      `${Math.floor(e / 60)}:${(e % 60).toString().padStart(2, '0')}`;
+  }
+
+  // ── MediaPipe ─────────────────────────────────────────────────────────────────
+  function initMediaPipe() {
+    pose = new Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+    pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false,
+      minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    pose.onResults(onResults);
+    const video = document.getElementById('video');
+    camera = new Camera(video, {
+      onFrame: async () => { if (!paused && sessionActive) await pose.send({ image: video }); },
+      width: 640, height: 480
+    });
+    camera.start();
+  }
+
+  // ── Posture analysis ──────────────────────────────────────────────────────────
+  function onResults(results) {
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = results.image.width; canvas.height = results.image.height;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!results.poseLandmarks) return;
+
+    const lm = results.poseLandmarks;
+    const { score, issues } = analyzePosture(lm, canvas.width, canvas.height);
+    lastScore = score; lastIssues = issues; frames++;
+    if (score >= threshold) goodFrames++;
+
+    drawSkeleton(ctx, lm, canvas.width, canvas.height, score);
+
+    const sv = document.getElementById('scoreVal');
+    sv.textContent = score;
+    sv.style.color = score >= threshold ? 'var(--good)' : score >= threshold - 15 ? 'var(--warn)' : 'var(--danger)';
+
+    const badge = document.getElementById('statusBadge');
+    if      (score >= threshold)           { badge.className = 'status-badge good'; badge.textContent = '✓ Good'; }
+    else if (score >= threshold - 15)      { badge.className = 'status-badge warn'; badge.textContent = '⚠ Fair'; }
+    else                                   { badge.className = 'status-badge bad';  badge.textContent = '✗ Poor'; }
+
+    document.getElementById('statGood').textContent =
+      frames > 0 ? Math.round((goodFrames / frames) * 100) + '%' : '0%';
+
+    renderIssues(issues);
+
+    const now = Date.now();
+    if (score < threshold && now - lastAlertTime > 8000) {
+      showAlert(); lastAlertTime = now; alertCount++;
+      document.getElementById('statAlerts').textContent = alertCount;
+    }
+    // OpenClaw auto-coach: fires after 60 s of sustained poor posture
+    if ((ocApiKey || ocGatewayUrl) && score < threshold && now - lastAutoCoachTime > 60000) {
+      askCoach('auto'); lastAutoCoachTime = now;
+    }
+  }
+
+  // ── Raw measurements from landmarks ─────────────────────────────────────────
+  function measure(lm, W, H) {
+    const lS = lm[11], rS = lm[12];   // shoulders
+    const lE = lm[7],  rE = lm[8];    // ears
+    const lH = lm[23], rH = lm[24];   // hips
+    const nose = lm[0];
+
+    // Shoulder width in normalised coords — SHRINKS when leaning toward camera
+    const shoulderWidth = Math.abs(lS.x - rS.x);
+
+    // Ear width — also shrinks when leaning toward cam (perspective foreshortening)
+    const earWidth = Math.abs(lE.x - rE.x);
+
+    // Shoulder midpoint Y (normalised)
+    const shMidY = (lS.y + rS.y) / 2;
+
+    // Ear midpoint Y
+    const earMidY = (lE.y + rE.y) / 2;
+
+    // Neck height: vertical gap ear-to-shoulder (shrinks when hunching forward)
+    const neckHeight = shMidY - earMidY;   // positive = ears above shoulders
+
+    // Torso height: hip-to-shoulder vertical span (shrinks when slouching)
+    const torsoHeight = (lH.y + rH.y) / 2 - shMidY;
+
+    // Shoulder tilt (lateral — detects sideways lean)
+    const shoulderTilt = Math.abs(lS.y - rS.y) * H;
+
+    // Ear-to-shoulder X offset (normalised) — lateral head lean
+    const earShoulderXOffset = Math.abs((lE.x + rE.x) / 2 - (lS.x + rS.x) / 2);
+
+    // MediaPipe provides a relative Z value (negative = closer to camera)
+    // Shoulder Z difference detects twisting or asymmetric lean
+    const shoulderZDiff = lS.z !== undefined ? Math.abs(lS.z - rS.z) : 0;
+
+    // Nose-to-shoulder-midY ratio: when you hunch forward the nose drops
+    // closer to the shoulder plane
+    const noseToShoulderY = shMidY - nose.y;   // positive = nose above shoulders
+
+    return { shoulderWidth, earWidth, neckHeight, torsoHeight,
+             shoulderTilt, earShoulderXOffset, shoulderZDiff, noseToShoulderY, H };
+  }
+
+  // ── Build baseline from calm sitting-upright frames ───────────────────────
+  function tryCalibrate(m) {
+    // Only accept frames where the basic geometry looks like upright sitting
+    if (m.neckHeight > 0.04 && m.torsoHeight > 0.1 && m.shoulderTilt < 20) {
+      calibBuf.push(m);
+    }
+    if (calibBuf.length >= CALIB_NEEDED) {
+      const avg = k => calibBuf.reduce((s, f) => s + f[k], 0) / calibBuf.length;
+      baseline = {
+        shoulderWidth:      avg('shoulderWidth'),
+        earWidth:           avg('earWidth'),
+        neckHeight:         avg('neckHeight'),
+        torsoHeight:        avg('torsoHeight'),
+        noseToShoulderY:    avg('noseToShoulderY'),
+      };
+      calibrating = false;
+      document.getElementById('statusBadge').className   = 'status-badge good';
+      document.getElementById('statusBadge').textContent = '✓ Good';
+      document.getElementById('issuesList').innerHTML    = '';
+      console.log('PostureAlert baseline:', baseline);
+    }
+  }
+
+  function analyzePosture(lm, W, H) {
+    const m = measure(lm, W, H);
+
+    // Still calibrating — collect frames and return perfect score
+    if (!baseline) {
+      tryCalibrate(m);
+      return { score: 100, issues: [{ text: 'Calibrating… sit upright', severity: 0 }] };
+    }
+
+    const issues = [];
+    let ded = 0;
+
+    // ── 1. Lateral shoulder tilt (sideways lean) ────────────────────────────
+    // This is the one check that already works — keep it.
+    if (m.shoulderTilt > 28) {
+      const sev = Math.min(m.shoulderTilt / 55, 1);
+      ded += 22 * sev;
+      issues.push({ text: `Shoulder tilt (sideways lean)`, severity: sev });
+    }
+
+    // ── 2. Forward lean toward camera — shoulder width narrows ─────────────
+    // When you lean toward the cam, perspective foreshortening shrinks
+    // apparent shoulder width. Ratio < 0.82 of baseline = leaning in.
+    const shWidthRatio = m.shoulderWidth / baseline.shoulderWidth;
+    if (shWidthRatio < 0.82) {
+      const sev = Math.min((0.82 - shWidthRatio) / 0.25, 1);
+      ded += 28 * sev;
+      issues.push({ text: `Leaning toward camera`, severity: sev });
+    }
+
+    // ── 3. Backward lean / recline — shoulder width widens ─────────────────
+    // Leaning back expands apparent shoulder width beyond baseline.
+    if (shWidthRatio > 1.18) {
+      const sev = Math.min((shWidthRatio - 1.18) / 0.25, 1);
+      ded += 20 * sev;
+      issues.push({ text: `Leaning away / reclining`, severity: sev });
+    }
+
+    // ── 4. Neck compression / head-forward hunch ────────────────────────────
+    // Ear-to-shoulder vertical gap shrinks when you hunch forward or
+    // crane your neck down — this catches the "laptop hunch" that the
+    // old torso check missed when the camera is front-facing.
+    const neckRatio = m.neckHeight / baseline.neckHeight;
+    if (neckRatio < 0.75) {
+      const sev = Math.min((0.75 - neckRatio) / 0.35, 1);
+      ded += 25 * sev;
+      issues.push({ text: `Head forward / neck craned`, severity: sev });
+    }
+
+    // ── 5. Torso collapse / slouch ──────────────────────────────────────────
+    // Hip-to-shoulder height shrinks when you slide down in the chair
+    // or round your lower back. Works even from a front-facing camera
+    // because the hips rise relative to the shoulders when you slouch.
+    const torsoRatio = m.torsoHeight / baseline.torsoHeight;
+    if (torsoRatio < 0.80) {
+      const sev = Math.min((0.80 - torsoRatio) / 0.30, 1);
+      ded += 22 * sev;
+      issues.push({ text: `Slouching / back rounded`, severity: sev });
+    }
+
+    // ── 6. Nose drop toward shoulder plane ─────────────────────────────────
+    // When you hunch forward the nose descends toward the shoulder line.
+    // Comparing nose-to-shoulder Y ratio catches forward head posture
+    // that the shoulder-width check alone might miss.
+    const noseRatio = m.noseToShoulderY / baseline.noseToShoulderY;
+    if (noseRatio < 0.70) {
+      const sev = Math.min((0.70 - noseRatio) / 0.30, 1);
+      // Only add if not already flagged by neckRatio to avoid double-penalising
+      if (!issues.find(i => i.text.includes('neck'))) {
+        ded += 18 * sev;
+        issues.push({ text: `Head drooping forward`, severity: sev });
+      }
+    }
+
+    // ── 7. Lateral head tilt (ear-to-shoulder X offset) ────────────────────
+    const earShRatio = m.earShoulderXOffset / Math.max(baseline.shoulderWidth * 0.15, 0.02);
+    if (earShRatio > 1.6) {
+      const sev = Math.min((earShRatio - 1.6) / 1.5, 1);
+      ded += 14 * sev;
+      issues.push({ text: `Head tilted sideways`, severity: sev });
+    }
+
+    return { score: Math.max(0, Math.round(100 - ded)), issues };
+  }
+
+  function renderIssues(issues) {
+    const list = document.getElementById('issuesList');
+    if (!issues.length) { list.innerHTML = '<li class="issue-item"><span class="issue-dot" style="background:var(--good)"></span>All clear!</li>'; return; }
+    list.innerHTML = issues.map(i => {
+      const c = i.severity > 0.6 ? 'var(--danger)' : i.severity > 0.3 ? 'var(--warn)' : 'var(--good)';
+      return `<li class="issue-item"><span class="issue-dot" style="background:${c}"></span>${i.text}</li>`;
+    }).join('');
+  }
+
+  function drawSkeleton(ctx, lm, W, H, score) {
+    [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],
+     [23,25],[25,27],[24,26],[26,28],[0,7],[0,8],[7,11],[8,12]].forEach(([a,b]) => {
+      const pa = lm[a], pb = lm[b];
+      if (!pa || !pb || pa.visibility < 0.5 || pb.visibility < 0.5) return;
+      const color = score >= threshold ? '#22c55e' : score >= threshold - 15 ? '#f59e0b' : '#ef4444';
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.shadowBlur = 6; ctx.shadowColor = color;
+      ctx.beginPath(); ctx.moveTo(pa.x * W, pa.y * H); ctx.lineTo(pb.x * W, pb.y * H); ctx.stroke();
+    });
+    ctx.fillStyle = '#fff'; ctx.shadowBlur = 4;
+    lm.forEach(pt => { if (pt.visibility < 0.5) return; ctx.beginPath(); ctx.arc(pt.x * W, pt.y * H, 4, 0, Math.PI * 2); ctx.fill(); });
+    ctx.shadowBlur = 0;
+  }
+
+  function showAlert() {
+    const el = document.getElementById('alertFlash');
+    el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 3000);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  //  callOpenClaw — unified OpenClaw request handler
+  //
+  //  Mode A — Gateway URL (openclaw serve):
+  //    POST {ocGatewayUrl}/chat/completions
+  //    model: "anthropic/claude-sonnet-4-20250514"   ← OpenClaw model ref
+  //    metadata: { agent_id, cache_retention }        ← OpenClaw agent params
+  //
+  //  Mode B — Direct API key (OpenClaw Anthropic provider):
+  //    POST https://api.anthropic.com/v1/messages
+  //    model: "claude-sonnet-4-20250514"              ← same model, direct path
+  // ══════════════════════════════════════════════════════════════════════════════
+  async function callOpenClaw(prompt, agentId = 'coach') {
+    const maxTok = agentId === 'summary' ? 300 : 200;
+
+    if (ocMode === 'gateway' && ocGatewayUrl) {
+      // ── Mode A: OpenClaw gateway (openclaw serve) ──────────────────────────
+      const res = await fetch(`${ocGatewayUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ocGatewayKey ? { 'Authorization': `Bearer ${ocGatewayKey}` } : {})
+        },
+        body: JSON.stringify({
+          model: OPENCLAW_MODEL,
+          max_tokens: maxTok,
+          messages: [{ role: 'user', content: prompt }],
+          metadata: {
+            agent_id: agentId,
+            cache_retention: agentId === 'summary' ? 'none' : 'short'
+          }
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+      return data.choices?.[0]?.message?.content || 'No response.';
+
+    } else {
+      // ── Mode B: Direct Anthropic API (OpenClaw Anthropic provider) ─────────
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ocApiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: ANTHROPIC_MODEL,
+          max_tokens: maxTok,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+      return data.content?.[0]?.text || 'No response.';
+    }
+  }
+
+  // ── OpenClaw agent triggers ───────────────────────────────────────────────────
+  async function askCoach(mode = 'manual') {
+    if (!ocApiKey && !(ocMode === 'gateway' && ocGatewayUrl)) {
+      addCoachMessage('⚠️ Configure OpenClaw above (API key or gateway URL) to enable AI coaching.', '');
+      return;
+    }
+
+    const agentId = mode === 'summary' ? 'summary' : 'coach';
+    let prompt;
+
+    if (mode === 'summary') {
+      // OpenClaw agent: summary — cacheRetention: none
+      const elapsed = sessionStart ? Math.floor((Date.now() - sessionStart) / 1000) : 0;
+      const goodPct = frames > 0 ? Math.round((goodFrames / frames) * 100) : 0;
+      prompt =
+        `PostureAlert session summary [OpenClaw agent: ${agentId}]:\n` +
+        `Duration: ${Math.floor(elapsed/60)}m ${elapsed%60}s | Good posture: ${goodPct}% | ` +
+        `Alerts: ${alertCount} | Final score: ${lastScore}/100\n` +
+        `Issues: ${lastIssues.map(i => i.text).join(', ') || 'none'}\n\n` +
+        `Write a 3-4 sentence session summary with encouragement and 2 specific improvement suggestions.`;
+    } else {
+      // OpenClaw agent: coach — cacheRetention: short
+      const trigger = mode === 'auto' ? 'auto-triggered (60 s poor posture)' : 'user-requested';
+      const issueText = lastIssues.length ? lastIssues.map(i => i.text).join(', ') : 'no specific issues';
+      prompt =
+        `PostureAlert coaching [OpenClaw agent: ${agentId}, trigger: ${trigger}]:\n` +
+        `Score: ${lastScore}/100 | Issues: ${issueText}\n\n` +
+        `Give exactly 2-3 concise, practical ergonomics tips. Be specific and encouraging.`;
+    }
+
+    const msgEl = addCoachMessage('🤖 OpenClaw · Claude is thinking…', 'loading');
+
+    try {
+      const text = await callOpenClaw(prompt, agentId);
+      const label = agentId === 'summary' ? 'Session Summary' : mode === 'auto' ? 'Auto-Coach' : 'Coach';
+      msgEl.innerHTML = `<div class="oc-msg-label">OpenClaw · ${label} · Claude Sonnet 4</div>${text}`;
+      msgEl.className = 'coach-msg oc-powered' + (mode === 'summary' ? ' summary' : '');
+    } catch (err) {
+      msgEl.textContent = '❌ OpenClaw error: ' + err.message;
+      msgEl.className = 'coach-msg';
+    }
+  }
+
+  async function requestSummary() { await askCoach('summary'); }
+
+  function addCoachMessage(text, type) {
+    const area = document.getElementById('coachMessages');
+    const el = document.createElement('div');
+    el.className = 'coach-msg' + (type ? ' ' + type : '');
+    el.textContent = text;
+    area.appendChild(el);
+    area.scrollTop = area.scrollHeight;
+    return el;
+  }
+</script>
+</body>
+</html>
