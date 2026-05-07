@@ -2,7 +2,7 @@
 
 **Team:** Code Crusaders  
 **Hackathon Theme:** AI for Wellness & Productivity  
-**Tech Stack:** HTML5 · CSS3 · JavaScript · MediaPipe Pose · OpenClaw · Claude Sonnet 4
+**Tech Stack:** HTML5 · MediaPipe Pose · OpenClaw · Claude Sonnet 4
 
 ---
 
