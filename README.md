@@ -3,6 +3,7 @@
 **Team:** Code Crusaders  
 **Hackathon Theme:** AI for Wellness & Productivity  
 **Tech Stack:** HTML5 · MediaPipe Pose · OpenClaw · Claude Sonnet 4
+**Working link:** posture-codecrusaders.netlify.app
 
 ---
 
